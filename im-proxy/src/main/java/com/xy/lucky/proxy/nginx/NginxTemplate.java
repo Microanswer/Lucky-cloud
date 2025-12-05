@@ -3,9 +3,7 @@ package com.xy.lucky.proxy.nginx;
 import com.xy.lucky.spring.annotations.core.Autowired;
 import com.xy.lucky.spring.annotations.core.Component;
 import com.xy.lucky.spring.annotations.core.PostConstruct;
-import com.xy.proxy.nacos.NacosTemplate;
 import lombok.extern.slf4j.Slf4j;
-
 import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -53,7 +51,7 @@ public class NginxTemplate {
     private final Path upstreamConf = nginxHome.resolve("conf/conf.d/netty_upstream.conf");
     // 定时任务
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-    @Autowired
+    // @Autowired
     private NacosTemplate nacosTemplate;
     // 上次记录节点列表
     private List<String> lastNodeConfig = new ArrayList<>();

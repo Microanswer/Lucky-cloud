@@ -18,7 +18,7 @@
         <module>im-file</module>
         <module>im-analysis</module>
         <module>im-leaf</module>
-        <module>im-proxy</module>
+        <!-- <module>im-proxy</module> -->
         <module>im-update</module>
         <module>im-meet</module>
         <module>im-ai</module>

@@ -1,8 +1,38 @@
 package com.xy.lucky.server.service.impl;
 
 
+import java.io.File;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+import org.apache.dubbo.config.annotation.DubboReference;
+import org.redisson.api.RLock;
+import org.redisson.api.RMapCache;
+import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
+import org.springframework.web.multipart.MultipartFile;
+
 import com.xy.lucky.core.constants.IMConstant;
-import com.xy.lucky.core.enums.*;
+import com.xy.lucky.core.enums.IMStatus;
+import com.xy.lucky.core.enums.IMemberStatus;
+import com.xy.lucky.core.enums.IMessageContentType;
+import com.xy.lucky.core.enums.IMessageReadStatus;
+import com.xy.lucky.core.enums.IMessageType;
+import com.xy.lucky.core.enums.ImGroupJoinStatus;
 import com.xy.lucky.core.model.IMGroupMessage;
 import com.xy.lucky.core.model.IMSingleMessage;
 import com.xy.lucky.core.model.IMessage;
@@ -23,34 +53,16 @@ import com.xy.lucky.dubbo.api.id.ImIdDubboService;
 import com.xy.lucky.general.exception.GlobalException;
 import com.xy.lucky.general.response.domain.Result;
 import com.xy.lucky.general.response.domain.ResultCode;
-import com.xy.lucky.server.api.IdGeneratorConstant;
 import com.xy.lucky.server.service.FileService;
 import com.xy.lucky.server.service.GroupService;
 import com.xy.lucky.server.service.MessageService;
 import com.xy.lucky.utils.id.IdUtils;
 import com.xy.lucky.utils.image.GroupHeadImageUtils;
 import com.xy.lucky.utils.time.DateTimeUtils;
+
 import jakarta.annotation.Resource;
 import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.dubbo.config.annotation.DubboReference;
-import org.redisson.api.RLock;
-import org.redisson.api.RMapCache;
-import org.redisson.api.RedissonClient;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.scheduling.annotation.Async;
-import org.springframework.stereotype.Service;
-import org.springframework.util.CollectionUtils;
-import org.springframework.util.StringUtils;
-import org.springframework.web.multipart.MultipartFile;
-
-import java.io.File;
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
-import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -192,9 +204,9 @@ public class GroupServiceImpl implements GroupService {
             }
 
             // 生成群ID
-            String groupId = imIdDubboService.generateId(
+            String groupId = "0";/*TODO imIdDubboService.generateId(
                     IdGeneratorConstant.uuid,
-                    IdGeneratorConstant.group_message_id).getStringId();
+                    IdGeneratorConstant.group_message_id).getStringId();*/
 
             // 生成群名称
             String groupName = "默认群聊" + IdUtils.randomUUID();
@@ -259,9 +271,9 @@ public class GroupServiceImpl implements GroupService {
         try {
             String groupId = StringUtils.hasText(dto.getGroupId()) ?
                     dto.getGroupId() :
-                    imIdDubboService.generateId(
+                    "0"/* TODO imIdDubboService.generateId(
                             IdGeneratorConstant.uuid,
-                            IdGeneratorConstant.group_message_id).getStringId();
+                            IdGeneratorConstant.group_message_id).getStringId()*/;
 
             String inviterId = dto.getUserId();
             List<String> inviteeIds = Optional.ofNullable(dto.getMemberIds())
@@ -315,9 +327,9 @@ public class GroupServiceImpl implements GroupService {
                 // 批量构建邀请请求
                 List<ImGroupInviteRequestPo> requests = new ArrayList<>(newInvitees.size());
                 for (String toId : newInvitees) {
-                    String requestId = imIdDubboService.generateId(
+                    String requestId = "0";/* TODO imIdDubboService.generateId(
                             IdGeneratorConstant.uuid,
-                            IdGeneratorConstant.group_invite_id).getStringId();
+                            IdGeneratorConstant.group_invite_id).getStringId();*/
 
                     ImGroupInviteRequestPo po = new ImGroupInviteRequestPo()
                             .setRequestId(requestId)

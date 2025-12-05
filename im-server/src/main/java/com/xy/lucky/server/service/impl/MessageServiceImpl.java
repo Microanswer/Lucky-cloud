@@ -1,33 +1,21 @@
 package com.xy.lucky.server.service.impl;
 
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.xy.lucky.core.enums.IMStatus;
-import com.xy.lucky.core.enums.IMWebRTCType;
-import com.xy.lucky.core.enums.IMessageReadStatus;
-import com.xy.lucky.core.enums.IMessageType;
-import com.xy.lucky.core.model.*;
-import com.xy.lucky.domain.dto.ChatDto;
-import com.xy.lucky.domain.mapper.MessageBeanMapper;
-import com.xy.lucky.domain.po.*;
-import com.xy.lucky.dubbo.api.database.chat.ImChatDubboService;
-import com.xy.lucky.dubbo.api.database.group.ImGroupMemberDubboService;
-import com.xy.lucky.dubbo.api.database.message.ImGroupMessageDubboService;
-import com.xy.lucky.dubbo.api.database.message.ImSingleMessageDubboService;
-import com.xy.lucky.dubbo.api.database.outbox.IMOutboxDubboService;
-import com.xy.lucky.dubbo.api.id.ImIdDubboService;
-import com.xy.lucky.general.response.domain.Result;
-import com.xy.lucky.general.response.domain.ResultCode;
-import com.xy.lucky.mq.rabbit.core.RabbitTemplateFactory;
-import com.xy.lucky.server.api.IdGeneratorConstant;
-import com.xy.lucky.server.service.MessageService;
-import com.xy.lucky.server.utils.RedisUtil;
-import com.xy.lucky.utils.json.JacksonUtils;
-import com.xy.lucky.utils.time.DateTimeUtils;
-import jakarta.annotation.PostConstruct;
-import jakarta.annotation.Resource;
-import lombok.extern.slf4j.Slf4j;
+import static com.xy.lucky.core.constants.IMConstant.MQ_EXCHANGE_NAME;
+import static com.xy.lucky.core.constants.IMConstant.USER_CACHE_PREFIX;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+
 import org.apache.dubbo.config.annotation.DubboReference;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
@@ -40,15 +28,43 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StopWatch;
 
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executor;
-import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.xy.lucky.core.enums.IMStatus;
+import com.xy.lucky.core.enums.IMWebRTCType;
+import com.xy.lucky.core.enums.IMessageReadStatus;
+import com.xy.lucky.core.enums.IMessageType;
+import com.xy.lucky.core.model.IMGroupMessage;
+import com.xy.lucky.core.model.IMRegisterUser;
+import com.xy.lucky.core.model.IMSingleMessage;
+import com.xy.lucky.core.model.IMVideoMessage;
+import com.xy.lucky.core.model.IMessageAction;
+import com.xy.lucky.core.model.IMessageWrap;
+import com.xy.lucky.domain.dto.ChatDto;
+import com.xy.lucky.domain.mapper.MessageBeanMapper;
+import com.xy.lucky.domain.po.IMOutboxPo;
+import com.xy.lucky.domain.po.ImChatPo;
+import com.xy.lucky.domain.po.ImGroupMemberPo;
+import com.xy.lucky.domain.po.ImGroupMessagePo;
+import com.xy.lucky.domain.po.ImGroupMessageStatusPo;
+import com.xy.lucky.domain.po.ImSingleMessagePo;
+import com.xy.lucky.dubbo.api.database.chat.ImChatDubboService;
+import com.xy.lucky.dubbo.api.database.group.ImGroupMemberDubboService;
+import com.xy.lucky.dubbo.api.database.message.ImGroupMessageDubboService;
+import com.xy.lucky.dubbo.api.database.message.ImSingleMessageDubboService;
+import com.xy.lucky.dubbo.api.database.outbox.IMOutboxDubboService;
+import com.xy.lucky.dubbo.api.id.ImIdDubboService;
+import com.xy.lucky.general.response.domain.Result;
+import com.xy.lucky.general.response.domain.ResultCode;
+import com.xy.lucky.mq.rabbit.core.RabbitTemplateFactory;
+import com.xy.lucky.server.service.MessageService;
+import com.xy.lucky.server.utils.RedisUtil;
+import com.xy.lucky.utils.json.JacksonUtils;
+import com.xy.lucky.utils.time.DateTimeUtils;
 
-import static com.xy.lucky.core.constants.IMConstant.MQ_EXCHANGE_NAME;
-import static com.xy.lucky.core.constants.IMConstant.USER_CACHE_PREFIX;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.Resource;
+import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @Service
@@ -156,7 +172,7 @@ public class MessageServiceImpl implements MessageService {
 
             // id 生成
             stopWatch.start("idGeneration");
-            Long messageId = imIdDubboService.generateId(IdGeneratorConstant.snowflake, IdGeneratorConstant.private_message_id).getLongId();
+            Long messageId = 0L;//TODO imIdDubboService.generateId(IdGeneratorConstant.snowflake, IdGeneratorConstant.private_message_id).getLongId();
             Long messageTime = DateTimeUtils.getCurrentUTCTimestamp();
             stopWatch.stop();
 
@@ -254,7 +270,7 @@ public class MessageServiceImpl implements MessageService {
             stopWatch.stop();
 
             stopWatch.start("idGeneration");
-            Long messageId = imIdDubboService.generateId(IdGeneratorConstant.snowflake, IdGeneratorConstant.group_message_id).getLongId();
+            Long messageId = 0L;// imIdDubboService.generateId(IdGeneratorConstant.snowflake, IdGeneratorConstant.group_message_id).getLongId();
             Long messageTime = DateTimeUtils.getCurrentUTCTimestamp();
             stopWatch.stop();
 
@@ -678,7 +694,7 @@ public class MessageServiceImpl implements MessageService {
             ImChatPo chatPo = imChatDubboService.selectOne(ownerId, toId, chatType);
             if (Objects.isNull(chatPo)) {
                 chatPo = new ImChatPo()
-                        .setChatId(imIdDubboService.generateId(IdGeneratorConstant.uuid, IdGeneratorConstant.chat_id).getStringId())
+                        .setChatId("0"/*TODO imIdDubboService.generateId(IdGeneratorConstant.uuid, IdGeneratorConstant.chat_id).getStringId()*/)
                         .setOwnerId(ownerId)
                         .setToId(toId)
                         .setSequence(messageTime)
