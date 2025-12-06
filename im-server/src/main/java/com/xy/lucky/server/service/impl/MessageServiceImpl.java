@@ -57,6 +57,7 @@ import com.xy.lucky.dubbo.api.id.ImIdDubboService;
 import com.xy.lucky.general.response.domain.Result;
 import com.xy.lucky.general.response.domain.ResultCode;
 import com.xy.lucky.mq.rabbit.core.RabbitTemplateFactory;
+import com.xy.lucky.server.config.IdGeneratorConstant;
 import com.xy.lucky.server.service.MessageService;
 import com.xy.lucky.server.utils.RedisUtil;
 import com.xy.lucky.utils.json.JacksonUtils;
@@ -100,8 +101,10 @@ public class MessageServiceImpl implements MessageService {
 
     @Resource
     private RedisUtil redisUtil;
+
     @Resource
     private RedissonClient redissonClient;
+
     @Resource
     @Qualifier("asyncTaskExecutor")
     private Executor asyncTaskExecutor;
@@ -172,7 +175,7 @@ public class MessageServiceImpl implements MessageService {
 
             // id 生成
             stopWatch.start("idGeneration");
-            Long messageId = 0L;//TODO imIdDubboService.generateId(IdGeneratorConstant.snowflake, IdGeneratorConstant.private_message_id).getLongId();
+            Long messageId = imIdDubboService.generateId(IdGeneratorConstant.snowflake, IdGeneratorConstant.private_message_id).getLongId();
             Long messageTime = DateTimeUtils.getCurrentUTCTimestamp();
             stopWatch.stop();
 
@@ -270,7 +273,7 @@ public class MessageServiceImpl implements MessageService {
             stopWatch.stop();
 
             stopWatch.start("idGeneration");
-            Long messageId = 0L;// imIdDubboService.generateId(IdGeneratorConstant.snowflake, IdGeneratorConstant.group_message_id).getLongId();
+            Long messageId = imIdDubboService.generateId(IdGeneratorConstant.snowflake, IdGeneratorConstant.group_message_id).getLongId();
             Long messageTime = DateTimeUtils.getCurrentUTCTimestamp();
             stopWatch.stop();
 
@@ -694,7 +697,7 @@ public class MessageServiceImpl implements MessageService {
             ImChatPo chatPo = imChatDubboService.selectOne(ownerId, toId, chatType);
             if (Objects.isNull(chatPo)) {
                 chatPo = new ImChatPo()
-                        .setChatId("0"/*TODO imIdDubboService.generateId(IdGeneratorConstant.uuid, IdGeneratorConstant.chat_id).getStringId()*/)
+                        .setChatId(imIdDubboService.generateId(IdGeneratorConstant.uuid, IdGeneratorConstant.chat_id).getStringId())
                         .setOwnerId(ownerId)
                         .setToId(toId)
                         .setSequence(messageTime)

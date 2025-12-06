@@ -1,6 +1,5 @@
 package com.xy.lucky.server.service.impl;
 
-
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -53,6 +52,7 @@ import com.xy.lucky.dubbo.api.id.ImIdDubboService;
 import com.xy.lucky.general.exception.GlobalException;
 import com.xy.lucky.general.response.domain.Result;
 import com.xy.lucky.general.response.domain.ResultCode;
+import com.xy.lucky.server.config.IdGeneratorConstant;
 import com.xy.lucky.server.service.FileService;
 import com.xy.lucky.server.service.GroupService;
 import com.xy.lucky.server.service.MessageService;
@@ -67,6 +67,59 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @Service
 public class GroupServiceImpl implements GroupService {
+
+    /**
+     * 群信息缓存前缀
+     */
+    static final String GROUP_INFO_PREFIX = "group:info:";
+    /**
+     * 群成员缓存前缀
+     */
+    static final String GROUP_MEMBERS_PREFIX = "group:members:";
+    /**
+     * 缓存过期时间(秒)
+     */
+    static final long TTL_SECONDS = 300L;
+    /**
+     * 加入群组锁前缀
+     */
+    static final String JOIN_PREFIX = "lock:join:";
+    /**
+     * 邀请成员锁前缀
+     */
+    static final String INVITE_PREFIX = "lock:invite:";
+    /**
+     * 退出群组锁前缀
+     */
+    static final String QUIT_PREFIX = "lock:quit:";
+    /**
+     * 锁等待时间(秒)
+     */
+    static final long WAIT_TIME = 5L;
+    /**
+     * 锁持有时间(秒)
+     */
+    static final long LEASE_TIME = 10L;
+    private final GroupHeadImageUtils groupHeadImageUtils = new GroupHeadImageUtils();
+    @DubboReference
+    private ImUserDataDubboService imUserDataDubboService;
+    @DubboReference
+    private ImGroupDubboService imGroupDubboService;
+    @DubboReference
+    private ImGroupMemberDubboService imGroupMemberDubboService;
+    @DubboReference
+    private ImGroupInviteRequestDubboService imGroupInviteRequestDubboService;
+    @DubboReference
+    private ImIdDubboService imIdDubboService;
+    @Resource
+    private MessageService messageService;
+    @Resource
+    private FileService fileService;
+    @Resource
+    private RedissonClient redissonClient;
+    @Resource
+    @Qualifier("asyncTaskExecutor")
+    private Executor asyncTaskExecutor;
 
     /**
      * 获取群成员信息（移除Redisson RMapCache缓存）
@@ -125,10 +178,10 @@ public class GroupServiceImpl implements GroupService {
         String groupId = groupDto.getGroupId();
         String userId = groupDto.getUserId();
 
-        RLock lock = redissonClient.getLock(LockConstants.QUIT_PREFIX + groupId + ":" + userId);
+        RLock lock = redissonClient.getLock(QUIT_PREFIX + groupId + ":" + userId);
         try {
             // 尝试获取锁，超时后自动释放
-            if (!lock.tryLock(LockConstants.WAIT_TIME, LockConstants.LEASE_TIME, TimeUnit.SECONDS)) {
+            if (!lock.tryLock(WAIT_TIME, LEASE_TIME, TimeUnit.SECONDS)) {
                 return Result.failed("退出操作过于频繁，请稍后重试");
             }
 
@@ -162,36 +215,6 @@ public class GroupServiceImpl implements GroupService {
         }
     }
 
-    private final GroupHeadImageUtils groupHeadImageUtils = new GroupHeadImageUtils();
-
-    @DubboReference
-    private ImUserDataDubboService imUserDataDubboService;
-
-    @DubboReference
-    private ImGroupDubboService imGroupDubboService;
-
-    @DubboReference
-    private ImGroupMemberDubboService imGroupMemberDubboService;
-
-    @DubboReference
-    private ImGroupInviteRequestDubboService imGroupInviteRequestDubboService;
-
-    @DubboReference
-    private ImIdDubboService imIdDubboService;
-
-    @Resource
-    private MessageService messageService;
-
-    @Resource
-    private FileService fileService;
-
-    @Resource
-    private RedissonClient redissonClient;
-
-    @Resource
-    @Qualifier("asyncTaskExecutor")
-    private Executor asyncTaskExecutor;
-
     /**
      * 创建新群（批量插入，异步消息）
      */
@@ -204,9 +227,9 @@ public class GroupServiceImpl implements GroupService {
             }
 
             // 生成群ID
-            String groupId = "0";/*TODO imIdDubboService.generateId(
+            String groupId = imIdDubboService.generateId(
                     IdGeneratorConstant.uuid,
-                    IdGeneratorConstant.group_message_id).getStringId();*/
+                    IdGeneratorConstant.group_message_id).getStringId();
 
             // 生成群名称
             String groupName = "默认群聊" + IdUtils.randomUUID();
@@ -251,8 +274,8 @@ public class GroupServiceImpl implements GroupService {
                     asyncTaskExecutor);
 
             // Redisson缓存群信息
-            RMapCache<String, Object> groupCache = redissonClient.getMapCache(CacheConstants.GROUP_INFO_PREFIX);
-            groupCache.fastPut(groupId, group, CacheConstants.TTL_SECONDS, TimeUnit.SECONDS);
+            RMapCache<String, Object> groupCache = redissonClient.getMapCache(GROUP_INFO_PREFIX);
+            groupCache.fastPut(groupId, group, TTL_SECONDS, TimeUnit.SECONDS);
 
             log.info("新建群聊成功 groupId={} owner={} members={}", groupId, ownerId, memberIds.size());
             log.debug("创建群聊耗时:{}ms", System.currentTimeMillis() - startTime);
@@ -269,19 +292,18 @@ public class GroupServiceImpl implements GroupService {
     public Result groupInvite(@NonNull GroupInviteDto dto) {
         long startTime = System.currentTimeMillis();
         try {
-            String groupId = StringUtils.hasText(dto.getGroupId()) ?
-                    dto.getGroupId() :
-                    "0"/* TODO imIdDubboService.generateId(
+            String groupId = StringUtils.hasText(dto.getGroupId()) ? dto.getGroupId()
+                    : imIdDubboService.generateId(
                             IdGeneratorConstant.uuid,
-                            IdGeneratorConstant.group_message_id).getStringId()*/;
+                            IdGeneratorConstant.group_message_id).getStringId();
 
             String inviterId = dto.getUserId();
             List<String> inviteeIds = Optional.ofNullable(dto.getMemberIds())
                     .orElse(Collections.emptyList());
 
             // 获取邀请锁
-            RLock lock = redissonClient.getLock(LockConstants.INVITE_PREFIX + groupId + ":" + inviterId);
-            if (!lock.tryLock(LockConstants.WAIT_TIME, LockConstants.LEASE_TIME, TimeUnit.SECONDS)) {
+            RLock lock = redissonClient.getLock(INVITE_PREFIX + groupId + ":" + inviterId);
+            if (!lock.tryLock(WAIT_TIME, LEASE_TIME, TimeUnit.SECONDS)) {
                 return Result.failed("邀请操作过于频繁，请稍后重试");
             }
 
@@ -312,14 +334,13 @@ public class GroupServiceImpl implements GroupService {
                 long now = DateTimeUtils.getCurrentUTCTimestamp();
                 long expireTime = now + 7L * 24 * 3600;
 
-                RMapCache<String, Object> groupCache = redissonClient.getMapCache(CacheConstants.GROUP_INFO_PREFIX);
+                RMapCache<String, Object> groupCache = redissonClient.getMapCache(GROUP_INFO_PREFIX);
                 Object cachedGroup = groupCache.get(groupId);
-                ImGroupPo groupPo = cachedGroup != null ?
-                        (ImGroupPo) cachedGroup :
-                        imGroupDubboService.selectOne(groupId);
+                ImGroupPo groupPo = cachedGroup != null ? (ImGroupPo) cachedGroup
+                        : imGroupDubboService.selectOne(groupId);
 
                 if (groupPo != null && cachedGroup == null) {
-                    groupCache.fastPut(groupId, groupPo, CacheConstants.TTL_SECONDS, TimeUnit.SECONDS);
+                    groupCache.fastPut(groupId, groupPo, TTL_SECONDS, TimeUnit.SECONDS);
                 }
 
                 String verifierId = groupPo != null ? groupPo.getOwnerId() : inviterId;
@@ -327,9 +348,9 @@ public class GroupServiceImpl implements GroupService {
                 // 批量构建邀请请求
                 List<ImGroupInviteRequestPo> requests = new ArrayList<>(newInvitees.size());
                 for (String toId : newInvitees) {
-                    String requestId = "0";/* TODO imIdDubboService.generateId(
+                    String requestId = imIdDubboService.generateId(
                             IdGeneratorConstant.uuid,
-                            IdGeneratorConstant.group_invite_id).getStringId();*/
+                            IdGeneratorConstant.group_invite_id).getStringId();
 
                     ImGroupInviteRequestPo po = new ImGroupInviteRequestPo()
                             .setRequestId(requestId)
@@ -369,7 +390,7 @@ public class GroupServiceImpl implements GroupService {
             log.error("群邀请异常 groupId={} inviterId={}", dto.getGroupId(), dto.getUserId(), e);
             throw new GlobalException(ResultCode.FAIL, "群邀请失败");
         } finally {
-            RLock lock = redissonClient.getLock(LockConstants.INVITE_PREFIX + dto.getGroupId() + ":" + dto.getUserId());
+            RLock lock = redissonClient.getLock(INVITE_PREFIX + dto.getGroupId() + ":" + dto.getUserId());
             if (lock.isHeldByCurrentThread()) {
                 lock.unlock();
             }
@@ -418,18 +439,16 @@ public class GroupServiceImpl implements GroupService {
             }
 
             // 获取群信息
-            RMapCache<String, Object> groupCache = redissonClient.getMapCache(CacheConstants.GROUP_INFO_PREFIX);
+            RMapCache<String, Object> groupCache = redissonClient.getMapCache(GROUP_INFO_PREFIX);
             Object cachedGroup = groupCache.get(groupId);
-            ImGroupPo groupPo = cachedGroup != null ?
-                    (ImGroupPo) cachedGroup :
-                    imGroupDubboService.selectOne(groupId);
+            ImGroupPo groupPo = cachedGroup != null ? (ImGroupPo) cachedGroup : imGroupDubboService.selectOne(groupId);
 
             if (groupPo == null) {
                 return Result.success("群不存在");
             }
 
             if (cachedGroup == null) {
-                groupCache.fastPut(groupId, groupPo, CacheConstants.TTL_SECONDS, TimeUnit.SECONDS);
+                groupCache.fastPut(groupId, groupPo, TTL_SECONDS, TimeUnit.SECONDS);
             }
 
             // 检查加入类型
@@ -464,10 +483,10 @@ public class GroupServiceImpl implements GroupService {
      */
     private Result processDirectJoin(String groupId, String userId, String inviterId, long startTime) {
         // 获取加入锁
-        RLock lock = redissonClient.getLock(LockConstants.JOIN_PREFIX + groupId + ":" + userId);
+        RLock lock = redissonClient.getLock(JOIN_PREFIX + groupId + ":" + userId);
         try {
             // 尝试获取锁
-            if (!lock.tryLock(LockConstants.WAIT_TIME, LockConstants.LEASE_TIME, TimeUnit.SECONDS)) {
+            if (!lock.tryLock(WAIT_TIME, LEASE_TIME, TimeUnit.SECONDS)) {
                 return Result.failed("加入操作过于频繁，请稍后重试");
             }
 
@@ -484,7 +503,8 @@ public class GroupServiceImpl implements GroupService {
 
             if (success) {
                 // 异步更新群信息和发送通知
-                CompletableFuture.runAsync(() -> updateGroupInfoAndNotify(groupId, inviterId, userId), asyncTaskExecutor);
+                CompletableFuture.runAsync(() -> updateGroupInfoAndNotify(groupId, inviterId, userId),
+                        asyncTaskExecutor);
             }
 
             log.info("批准邀请成功 groupId={} userId={}", groupId, userId);
@@ -534,7 +554,7 @@ public class GroupServiceImpl implements GroupService {
     @Override
     public Result<?> groupInfo(@NonNull GroupDto groupDto) {
         try {
-            RMapCache<String, Object> cache = redissonClient.getMapCache(CacheConstants.GROUP_INFO_PREFIX);
+            RMapCache<String, Object> cache = redissonClient.getMapCache(GROUP_INFO_PREFIX);
             Object cached = cache.get(groupDto.getGroupId());
 
             ImGroupPo group;
@@ -543,7 +563,7 @@ public class GroupServiceImpl implements GroupService {
             } else {
                 group = imGroupDubboService.selectOne(groupDto.getGroupId());
                 if (group != null) {
-                    cache.fastPut(groupDto.getGroupId(), group, CacheConstants.TTL_SECONDS, TimeUnit.SECONDS);
+                    cache.fastPut(groupDto.getGroupId(), group, TTL_SECONDS, TimeUnit.SECONDS);
                 }
             }
 
@@ -563,36 +583,36 @@ public class GroupServiceImpl implements GroupService {
         long startTime = System.currentTimeMillis();
         try {
             String groupId = groupDto.getGroupId();
-            
+
             // 检查群组是否存在
             ImGroupPo existingGroup = imGroupDubboService.selectOne(groupId);
             if (existingGroup == null) {
                 return Result.failed("群组不存在");
             }
-            
+
             // 构建更新对象
             ImGroupPo updateGroup = new ImGroupPo().setGroupId(groupId);
-            
+
             // 更新群名称
             if (StringUtils.hasText(groupDto.getGroupName())) {
                 updateGroup.setGroupName(groupDto.getGroupName());
             }
-            
+
             // 更新群头像
             if (StringUtils.hasText(groupDto.getAvatar())) {
                 updateGroup.setAvatar(groupDto.getAvatar());
             }
-            
+
             // 更新群简介
             if (StringUtils.hasText(groupDto.getIntroduction())) {
                 updateGroup.setIntroduction(groupDto.getIntroduction());
             }
-            
+
             // 更新群公告
             if (StringUtils.hasText(groupDto.getNotification())) {
                 updateGroup.setNotification(groupDto.getNotification());
             }
-            
+
             // 更新数据库
             boolean success = imGroupDubboService.update(updateGroup);
 
@@ -641,11 +661,11 @@ public class GroupServiceImpl implements GroupService {
             imGroupDubboService.update(update);
 
             // 更新Redisson缓存
-            RMapCache<String, Object> cache = redissonClient.getMapCache(CacheConstants.GROUP_INFO_PREFIX);
+            RMapCache<String, Object> cache = redissonClient.getMapCache(GROUP_INFO_PREFIX);
             ImGroupPo cachedGroup = (ImGroupPo) cache.get(groupId);
             if (cachedGroup != null) {
                 cachedGroup.setAvatar(avatarUrl);
-                cache.fastPut(groupId, cachedGroup, CacheConstants.TTL_SECONDS, TimeUnit.SECONDS);
+                cache.fastPut(groupId, cachedGroup, TTL_SECONDS, TimeUnit.SECONDS);
             }
         } catch (Exception e) {
             log.error("异步生成群头像失败 groupId={}", groupId, e);
@@ -687,9 +707,9 @@ public class GroupServiceImpl implements GroupService {
                     messages.stream()
                             .map(msg -> CompletableFuture.runAsync(
                                     () -> messageService.sendSingleMessage(msg),
-                            asyncTaskExecutor))
-                    .toArray(CompletableFuture[]::new)
-            ).get();
+                                    asyncTaskExecutor))
+                            .toArray(CompletableFuture[]::new))
+                    .get();
         } catch (Exception e) {
             log.error("批量发送邀请消息失败 groupId={} invitees={}", groupId, invitees.size(), e);
         }
@@ -712,7 +732,8 @@ public class GroupServiceImpl implements GroupService {
     }
 
     // 向管理员发送审批请求（批量，使用Redisson缓存）
-    private void sendJoinApprovalRequestToAdmins(String groupId, String inviterId, String inviteeId, ImGroupPo groupPo) {
+    private void sendJoinApprovalRequestToAdmins(String groupId, String inviterId, String inviteeId,
+            ImGroupPo groupPo) {
         try {
             // 直接从数据库获取成员列表，不再使用缓存
             List<ImGroupMemberPo> members = imGroupMemberDubboService.selectList(groupId);
@@ -764,8 +785,8 @@ public class GroupServiceImpl implements GroupService {
                             .map(m -> CompletableFuture.runAsync(
                                     () -> messageService.sendSingleMessage(m),
                                     asyncTaskExecutor))
-                            .toArray(CompletableFuture[]::new)
-            ).join();
+                            .toArray(CompletableFuture[]::new))
+                    .join();
         } catch (Exception e) {
             log.error("向管理员发送审批请求失败 groupId={} inviterId={} inviteeId={}", groupId, inviterId, inviteeId, e);
         }
@@ -816,47 +837,4 @@ public class GroupServiceImpl implements GroupService {
         }
     }
 
-    /**
-     * Redis缓存相关常量
-     */
-    private static final class CacheConstants {
-        /**
-         * 群信息缓存前缀
-         */
-        static final String GROUP_INFO_PREFIX = "group:info:";
-        /**
-         * 群成员缓存前缀
-         */
-        static final String GROUP_MEMBERS_PREFIX = "group:members:";
-        /**
-         * 缓存过期时间(秒)
-         */
-        static final long TTL_SECONDS = 300L;
-    }
-
-    /**
-     * 分布式锁相关常量
-     */
-    private static final class LockConstants {
-        /**
-         * 加入群组锁前缀
-         */
-        static final String JOIN_PREFIX = "lock:join:";
-        /**
-         * 邀请成员锁前缀
-         */
-        static final String INVITE_PREFIX = "lock:invite:";
-        /**
-         * 退出群组锁前缀
-         */
-        static final String QUIT_PREFIX = "lock:quit:";
-        /**
-         * 锁等待时间(秒)
-         */
-        static final long WAIT_TIME = 5L;
-        /**
-         * 锁持有时间(秒)
-         */
-        static final long LEASE_TIME = 10L;
-    }
 }
